@@ -275,10 +275,31 @@ pub fn apply_relocations(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option<(usiz
         let mut offset = reloc_dir.VirtualAddress as usize;
         let end_offset = offset + reloc_dir.Size as usize;
 
+        println!("Relocation directory: VA={:#x}, Size={:#x}", reloc_dir.VirtualAddress, reloc_dir.Size);
+        println!("Memory size: {:#x}, Initial offset: {:#x}", dll_bytes.len(), offset);
+        println!("End offset: {:#x}", end_offset);
+
+        // Before the loop
+        if offset >= dll_bytes.len() {
+            println!("CRASH POINT: Initial offset {:#x} >= size {:#x}", offset, dll_bytes.len());
+            return None;
+        }
+
         // Process each relocation block
         while offset < end_offset {
+            if offset >= dll_bytes.len() {
+                println!("Relocation offset {:#x} exceeds buffer size {:#x}", offset, dll_bytes.len());
+                break;
+            }
+
             let block = (dll_bytes.as_ptr() as usize + offset) as *const IMAGE_BASE_RELOCATION;
+            if block.is_null() {
+                println!("Null relocation block pointer at offset {:#x}", offset);
+                break;
+            }
+
             if (*block).SizeOfBlock == 0 || offset + (*block).SizeOfBlock as usize > dll_bytes.len() {
+                println!("Invalid relocation block at offset {:#x}", offset);
                 break;
             }
 
@@ -555,9 +576,29 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
         let mut offset = reloc_dir.VirtualAddress as usize;
         let end_offset = offset + reloc_dir.Size as usize;
 
+        println!("Relocation directory: VA={:#x}, Size={:#x}", reloc_dir.VirtualAddress, reloc_dir.Size);
+        println!("Memory size: {:#x}, Initial offset: {:#x}", size, offset);
+        println!("End offset: {:#x}", end_offset);
+
+        // Before the loop
+        if offset >= size {
+            println!("CRASH POINT: Initial offset {:#x} >= size {:#x}", offset, size);
+            return None;
+        }
+
         // Process each relocation block
         while offset < end_offset {
+            if offset >= size {
+                println!("Relocation offset {:#x} exceeds buffer size {:#x}", offset, size);
+                break;
+            }
+
             let block = (memory as usize + offset) as *const IMAGE_BASE_RELOCATION;
+            if block.is_null() {
+                println!("Null relocation block pointer at offset {:#x}", offset);
+                break;
+            }
+
             if (*block).SizeOfBlock == 0 || offset + (*block).SizeOfBlock as usize > size {
                 println!("Invalid relocation block at offset {:#x}", offset);
                 break;
