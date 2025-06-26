@@ -2,6 +2,8 @@
 
 A Rust-based tool for demonstrating how to dynamically loading clean copies of `ntdll.dll` from Microsoft's symbol servers and executing functions from the clean DLL in memory. This project demonstrates techniques for bypassing DLL hooking and EDR (Endpoint Detection and Response) systems by loading pristine copies of system DLLs.
 
+note - some functions in the target dll may have additional dependencies and fail. this is an experimental tool demo
+
 ## Overview
 
 Byont downloads clean copies of `ntdll.dll` directly from Microsoft's symbol servers, loads them into executable memory, applies proper relocations, and allows execution of functions from the clean DLL. Could also be used for kernel32 and any other dlls available on the Microsoft symbols server. This is useful for:
