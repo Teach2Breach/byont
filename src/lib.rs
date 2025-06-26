@@ -78,8 +78,8 @@ fn get_ntdll_symbol_info() -> Option<PeInfo> {
             Buffer: dll_name.as_ptr() as *mut _,
         };
 
-        println!("String length: {}, Maximum length: {}", name_len, dll_name.len() * 2);
-        println!("Buffer contents: {:?}", dll_name);
+        //println!("String length: {}, Maximum length: {}", name_len, dll_name.len() * 2);
+        //println!("Buffer contents: {:?}", dll_name);
 
         let mut ntdll: PVOID = std::ptr::null_mut();
         let status = LdrGetDllHandle(

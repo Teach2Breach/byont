@@ -76,7 +76,7 @@ fn main() {
         // Try NtDelayExecution if we found it
         if let Some(delay_execution_addr) = delay_execution_address {
             println!("=== NtDelayExecution Test Starting ===");
-            println!("Trying NtDelayExecution with zero delay first...");
+            //println!("Trying NtDelayExecution with zero delay first...");
             
             type NtDelayExecutionFn = unsafe extern "system" fn(u8, PLARGE_INTEGER) -> i32;
             let nt_delay_execution: NtDelayExecutionFn = unsafe { std::mem::transmute(delay_execution_addr) };
@@ -92,10 +92,10 @@ fn main() {
             }
             
             // Debug: Let's see what value we actually set
-            unsafe {
-                let ptr = &three_sec_delay as *const LARGE_INTEGER as *const i64;
-                println!("Set LARGE_INTEGER value for 3s: {}", *ptr);
-            }
+
+            //let ptr = &three_sec_delay as *const LARGE_INTEGER as *const i64;
+            //println!("Set LARGE_INTEGER value for 3s: {}", *ptr);
+            
             
             let start_time_three = std::time::Instant::now();
             let status_three = unsafe { nt_delay_execution(0, &mut three_sec_delay) };
@@ -111,8 +111,8 @@ fn main() {
             }
             
             println!("=== NtDelayExecution Test Complete ===");
-            println!("Note: NtDelayExecution is working correctly with proper time units.");
-            println!("3-second delay completed successfully from manually loaded clean NTDLL.");
+            //println!("Note: NtDelayExecution is working correctly with proper time units.");
+            //println!("3-second delay completed successfully from manually loaded clean NTDLL.");
         } else {
             println!("NtDelayExecution function not found, skipping test");
         }
@@ -129,9 +129,9 @@ fn main() {
             let mut minor = 0u32;
             let mut build = 0u32;
             
-            println!("Before RtlGetNtVersionNumbers: major={}, minor={}, build={}", major, minor, build);
+            //println!("Before RtlGetNtVersionNumbers: major={}, minor={}, build={}", major, minor, build);
             unsafe { rtl_get_nt_version_numbers(&mut major, &mut minor, &mut build) };
-            println!("After RtlGetNtVersionNumbers: major={}, minor={}, build={}", major, minor, build);
+            //println!("After RtlGetNtVersionNumbers: major={}, minor={}, build={}", major, minor, build);
             
             // Convert build number to proper format (remove high bits)
             let actual_build = build & 0xFFFF;
