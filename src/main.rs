@@ -1,11 +1,6 @@
 use byont::*;
 use winapi::shared::ntdef::{LARGE_INTEGER, PLARGE_INTEGER};
 
-#[macro_use]
-extern crate litcrypt;
-
-use_litcrypt!();
-
 fn main() {
     println!("Starting...");
     

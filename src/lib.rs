@@ -1,11 +1,6 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-#[macro_use]
-extern crate litcrypt;
-
-use_litcrypt!();
-
 use winapi::shared::ntdef::{UNICODE_STRING, PVOID, ULONG};
 use winapi::um::winnt::{
     IMAGE_DEBUG_DIRECTORY,
@@ -70,7 +65,7 @@ fn wide_string(s: &str) -> Vec<u16> {
 
 fn get_ntdll_symbol_info() -> Option<PeInfo> {
     unsafe {
-        let dll_name = wide_string(&lc!("ntdll.dll"));
+        let dll_name = wide_string("ntdll.dll");
         let name_len = (dll_name.len() - 1) * 2;  // exclude null terminator, but multiply by 2 for wide chars
         let mut unicode_name = UNICODE_STRING {
             Length: name_len as u16,
@@ -158,7 +153,7 @@ pub fn get_clean_ntdll() -> Option<Vec<u8>> {
         pe_info.size
     );
 
-    println!("{}: {}", lc!("Attempting download from"), symbol_path);
+    println!("Attempting download from: {}", symbol_path);
 
     //consider using a better method in the future
     // Create blocking HTTP client with longer timeout
@@ -178,15 +173,13 @@ pub fn get_clean_ntdll() -> Option<Vec<u8>> {
                     response = Some(resp);
                     break;
                 }
-                println!("{}: {} (attempts remaining: {})", 
-                    lc!("Download failed with status"),
+                println!("Download failed with status: {} (attempts remaining: {})", 
                     resp.status(),
                     retries - 1
                 );
             }
             Err(e) => {
-                println!("{}: {} (attempts remaining: {})",
-                    lc!("Download error"),
+                println!("Download error: {} (attempts remaining: {})",
                     e,
                     retries - 1
                 );
@@ -199,46 +192,47 @@ pub fn get_clean_ntdll() -> Option<Vec<u8>> {
     }
 
     let response = response?;
-
-    // Get the bytes
+    
+    // Read response bytes
     let clean_dll = match response.bytes() {
         Ok(bytes) => bytes.to_vec(),
         Err(e) => {
-            println!("{}: {}", lc!("Failed to read response bytes"), e);
+            println!("Failed to read response bytes: {}", e);
             return None;
         }
     };
 
-    // Verify the downloaded DLL
+    // Validate the downloaded file
+    if clean_dll.len() < std::mem::size_of::<IMAGE_DOS_HEADER>() {
+        println!("Downloaded file too small");
+        return None;
+    }
+
+    // Check DOS header signature
+    let dos_header = clean_dll.as_ptr() as *const IMAGE_DOS_HEADER;
     unsafe {
-        // Check if it's a valid PE file
-        if clean_dll.len() < std::mem::size_of::<IMAGE_DOS_HEADER>() {
-            println!("{}", lc!("Downloaded file too small"));
+        if (*dos_header).e_magic != 0x5A4D { // MZ signature
+            println!("Invalid DOS header signature");
             return None;
         }
 
-        let dos_header = clean_dll.as_ptr() as *const IMAGE_DOS_HEADER;
-        if (*dos_header).e_magic != 0x5A4D { // "MZ" signature
-            println!("{}", lc!("Invalid DOS header signature"));
-            return None;
-        }
-
-        // Verify PE header
+        // Check PE signature
         let nt_headers = (clean_dll.as_ptr() as usize + (*dos_header).e_lfanew as usize) 
             as *const IMAGE_NT_HEADERS;
-        if (*nt_headers).Signature != 0x4550 { // "PE" signature
-            println!("{}", lc!("Invalid PE signature"));
+        if (*nt_headers).Signature != 0x00004550 { // PE signature
+            println!("Invalid PE signature");
             return None;
         }
 
         // Verify timestamp matches
-        if (*nt_headers).FileHeader.TimeDateStamp != pe_info.timestamp {
-            println!("{}", lc!("Timestamp mismatch in downloaded file"));
+        let downloaded_timestamp = (*nt_headers).FileHeader.TimeDateStamp;
+        if downloaded_timestamp != pe_info.timestamp {
+            println!("Timestamp mismatch in downloaded file");
             return None;
         }
     }
 
-    println!("{}: {} bytes", lc!("Successfully downloaded clean NTDLL"), clean_dll.len());
+    println!("Successfully downloaded clean NTDLL: {} bytes", clean_dll.len());
     Some(clean_dll)
 }
 
@@ -492,11 +486,23 @@ pub fn verify_security_directory(dll_bytes: &std::pin::Pin<Vec<u8>>) -> Option<(
 // Function to allocate executable memory and copy the DLL into it
 pub fn allocate_executable_memory(dll_bytes: &[u8]) -> Option<(*mut u8, usize)> {
     unsafe {
-        // Allocate memory with proper alignment
-        let size = dll_bytes.len();
+        // Parse PE headers to get the virtual size
+        let dos_header = dll_bytes.as_ptr() as *const IMAGE_DOS_HEADER;
+        let nt_headers = (dll_bytes.as_ptr() as usize + (*dos_header).e_lfanew as usize) 
+            as *const IMAGE_NT_HEADERS;
+        
+        // Use the maximum of SizeOfImage and file size to ensure we have enough memory
+        let virtual_size = (*nt_headers).OptionalHeader.SizeOfImage as usize;
+        let file_size = dll_bytes.len();
+        let allocation_size = std::cmp::max(virtual_size, file_size);
+        
+        println!("File size: {:#x}, Virtual size: {:#x}, Allocation size: {:#x}", 
+            file_size, virtual_size, allocation_size);
+        
+        // Allocate memory with proper alignment using the larger size
         let memory = VirtualAlloc(
             std::ptr::null_mut(),
-            size,
+            allocation_size,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_READWRITE
         ) as *mut u8;
@@ -506,16 +512,25 @@ pub fn allocate_executable_memory(dll_bytes: &[u8]) -> Option<(*mut u8, usize)> 
             return None;
         }
         
-        println!("Allocated memory at {:p} with size {}", memory, size);
+        println!("Allocated memory at {:p} with size {}", memory, allocation_size);
         
-        // Copy DLL bytes to allocated memory
+        // Copy DLL bytes to allocated memory (only the file size)
         std::ptr::copy_nonoverlapping(
             dll_bytes.as_ptr(),
             memory,
-            size
+            file_size
         );
         
-        Some((memory, size))
+        // Zero out the remaining memory (beyond file size)
+        if allocation_size > file_size {
+            std::ptr::write_bytes(
+                memory.add(file_size),
+                0,
+                allocation_size - file_size
+            );
+        }
+        
+        Some((memory, allocation_size))
     }
 }
 
