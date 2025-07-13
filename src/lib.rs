@@ -63,25 +63,25 @@ fn wide_string(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn get_ntdll_symbol_info() -> Option<PeInfo> {
+fn get_dll_symbol_info(dll_name: &str) -> Option<PeInfo> {
     unsafe {
-        let dll_name = wide_string("ntdll.dll");
-        let name_len = (dll_name.len() - 1) * 2;  // exclude null terminator, but multiply by 2 for wide chars
+        let dll_name_wide = wide_string(dll_name);
+        let name_len = (dll_name_wide.len() - 1) * 2;  // exclude null terminator, but multiply by 2 for wide chars
         let mut unicode_name = UNICODE_STRING {
             Length: name_len as u16,
-            MaximumLength: (dll_name.len() * 2) as u16,  // include space for null terminator
-            Buffer: dll_name.as_ptr() as *mut _,
+            MaximumLength: (dll_name_wide.len() * 2) as u16,  // include space for null terminator
+            Buffer: dll_name_wide.as_ptr() as *mut _,
         };
 
-        //println!("String length: {}, Maximum length: {}", name_len, dll_name.len() * 2);
-        //println!("Buffer contents: {:?}", dll_name);
+        //println!("String length: {}, Maximum length: {}", name_len, dll_name_wide.len() * 2);
+        //println!("Buffer contents: {:?}", dll_name_wide);
 
-        let mut ntdll: PVOID = std::ptr::null_mut();
+        let mut dll_handle: PVOID = std::ptr::null_mut();
         let status = LdrGetDllHandle(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             &mut unicode_name,
-            &mut ntdll
+            &mut dll_handle
         );
         
         if status != 0 {
@@ -89,13 +89,13 @@ fn get_ntdll_symbol_info() -> Option<PeInfo> {
             return None;
         }
 
-        if ntdll.is_null() {
+        if dll_handle.is_null() {
             println!("LdrGetDllHandle returned null handle");
             return None;
         }
         
-        let dos_header = ntdll as *const IMAGE_DOS_HEADER;
-        let nt_headers = (ntdll as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
+        let dos_header = dll_handle as *const IMAGE_DOS_HEADER;
+        let nt_headers = (dll_handle as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
         
         // Get timestamp and size from PE header
         let timestamp = (*nt_headers).FileHeader.TimeDateStamp;
@@ -106,9 +106,9 @@ fn get_ntdll_symbol_info() -> Option<PeInfo> {
         let debug_rva = debug_dir.VirtualAddress;
         
         if debug_rva != 0 {
-            let debug_entry = (ntdll as usize + debug_rva as usize) as *const IMAGE_DEBUG_DIRECTORY;
+            let debug_entry = (dll_handle as usize + debug_rva as usize) as *const IMAGE_DEBUG_DIRECTORY;
             if (*debug_entry).Type == IMAGE_DEBUG_TYPE_CODEVIEW {
-                let pdb_info = (ntdll as usize + (*debug_entry).AddressOfRawData as usize) as *const RSDS_DEBUG_FORMAT;
+                let pdb_info = (dll_handle as usize + (*debug_entry).AddressOfRawData as usize) as *const RSDS_DEBUG_FORMAT;
                 
                 // Extract PDB GUID
                 let guid = format!("{:08X}{:04X}{:04X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
@@ -142,15 +142,17 @@ fn get_ntdll_symbol_info() -> Option<PeInfo> {
     }
 }
 
-pub fn get_clean_ntdll() -> Option<Vec<u8>> {
-    let pe_info = get_ntdll_symbol_info()?;
+pub fn get_clean_dll(dll_name: &str) -> Option<Vec<u8>> {
+    let pe_info = get_dll_symbol_info(dll_name)?;
     
     // Build symbol path for DLL download
-    // Format: https://msdl.microsoft.com/download/symbols/ntdll.dll/HASH/ntdll.dll
+    // Format: https://msdl.microsoft.com/download/symbols/dllname.dll/HASH/dllname.dll
     let symbol_path = format!(
-        "https://msdl.microsoft.com/download/symbols/ntdll.dll/{:X}{:X}/ntdll.dll", 
+        "https://msdl.microsoft.com/download/symbols/{}.dll/{:X}{:X}/{}.dll", 
+        dll_name,
         pe_info.timestamp,
-        pe_info.size
+        pe_info.size,
+        dll_name
     );
 
     println!("Attempting download from: {}", symbol_path);
@@ -232,8 +234,13 @@ pub fn get_clean_ntdll() -> Option<Vec<u8>> {
         }
     }
 
-    println!("Successfully downloaded clean NTDLL: {} bytes", clean_dll.len());
+    println!("Successfully downloaded clean {}: {} bytes", dll_name, clean_dll.len());
     Some(clean_dll)
+}
+
+// Keep the original function for backward compatibility
+pub fn get_clean_ntdll() -> Option<Vec<u8>> {
+    get_clean_dll("ntdll")
 }
 
 pub fn apply_relocations(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option<(usize, *const std::ffi::c_void, *const std::ffi::c_void)> {
@@ -745,7 +752,7 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
     Some((clean_dll_base, ntdll_base, delta as *const std::ffi::c_void))
 }
 
-pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_void, function_name: &str) -> Option<usize> {
+pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_void, function_name: &str) -> Option<(usize, bool)> {
     unsafe {
         // Parse PE structure
         let dos_header = memory as *const IMAGE_DOS_HEADER;
@@ -814,10 +821,7 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
                         .to_str()
                         .unwrap_or("");
                     println!("Function is forwarded to: {}", forward_str);
-                    
-                    // For now, we'll just return the address of the forwarded name string
-                    // In a real implementation, you'd want to resolve the forwarded function
-                    return Some(function_addr);
+                    return Some((function_addr, true));
                 }
                 
                 // Check the first few bytes of the function to make sure it looks like code
@@ -842,7 +846,7 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
                     }
                 }
                 
-                return Some(function_addr);
+                return Some((function_addr, false));
             }
         }
         
@@ -851,19 +855,23 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
     None
 }
 
-pub fn copy_security_directory_raw(memory: *mut u8, _size: usize) -> Option<()> {
+pub fn copy_security_directory_raw(memory: *mut u8, _size: usize, dll_name: &str) -> Option<()> {
+    if dll_name.to_ascii_lowercase() != "ntdll" {
+        println!("Skipping security directory copy for {} (only supported for ntdll)", dll_name);
+        return Some(());
+    }
     unsafe {
         let teb = get_teb();
-        let ntdll_base = get_dll_address("ntdll.dll".to_string(), teb)?;
+        let source_dll_base = get_dll_address("ntdll.dll".to_string(), teb)?;
 
         // Get security directory from original NTDLL
-        let orig_dos = ntdll_base as *const IMAGE_DOS_HEADER;
-        let orig_nt = (ntdll_base as usize + (*orig_dos).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
+        let orig_dos = source_dll_base as *const IMAGE_DOS_HEADER;
+        let orig_nt = (source_dll_base as usize + (*orig_dos).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
         let sec_dir = &(*orig_nt).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY as usize];
 
         if sec_dir.VirtualAddress == 0 || sec_dir.Size == 0 {
-            println!("No security directory found in original NTDLL");
-            return None;
+            println!("No security directory found in original ntdll");
+            return Some(());
         }
 
         // Get location in our clean DLL
@@ -872,12 +880,12 @@ pub fn copy_security_directory_raw(memory: *mut u8, _size: usize) -> Option<()> 
             as *mut IMAGE_NT_HEADERS;
 
         println!("Copying security directory from {:p} with size {:#x}", 
-            (ntdll_base as usize + sec_dir.VirtualAddress as usize) as *const u8,
+            (source_dll_base as usize + sec_dir.VirtualAddress as usize) as *const u8,
             sec_dir.Size);
 
         // Copy the security directory
         std::ptr::copy_nonoverlapping(
-            (ntdll_base as usize + sec_dir.VirtualAddress as usize) as *const u8,
+            (source_dll_base as usize + sec_dir.VirtualAddress as usize) as *const u8,
             (memory as usize + sec_dir.VirtualAddress as usize) as *mut u8,
             sec_dir.Size as usize
         );

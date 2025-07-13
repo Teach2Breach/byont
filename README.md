@@ -1,33 +1,44 @@
-# Byont - Bring Your Own NTDLL
+# Byont - Clean DLL Loader
 
-A Rust-based tool for demonstrating how to dynamically loading clean copies of `ntdll.dll` from Microsoft's symbol servers and executing functions from the clean DLL in memory. This project demonstrates techniques for bypassing DLL hooking and EDR (Endpoint Detection and Response) systems by loading pristine copies of system DLLs.
-
-note - some functions in the target dll may have additional dependencies and fail. this is an experimental tool demo
+A Rust-based tool for dynamically loading clean copies of Windows DLLs from Microsoft's symbol servers and executing functions from the clean DLLs in memory. This project demonstrates techniques for bypassing DLL hooking and EDR (Endpoint Detection and Response) systems by loading pristine copies of system DLLs.
 
 ## Overview
 
-Byont downloads clean copies of `ntdll.dll` directly from Microsoft's symbol servers, loads them into executable memory, applies proper relocations, and allows execution of functions from the clean DLL. Could also be used for kernel32 and any other dlls available on the Microsoft symbols server. This is useful for:
+Byont downloads clean copies of Windows DLLs (such as `ntdll.dll`, `kernel32.dll`, etc.) directly from Microsoft's symbol servers, loads them into executable memory, applies proper relocations, and allows execution of functions from the clean DLLs. This is useful for:
 
 - **Security Research**: Testing EDR evasion techniques
 - **Malware Analysis**: Understanding DLL hooking detection methods
+- **System Administration**: Bypassing problematic DLL hooks
 - **Educational Purposes**: Learning about PE file loading and Windows internals
 
 ## Features
 
-- **Clean DLL Download**: Automatically downloads pristine `ntdll.dll` from Microsoft symbol servers
-- **Memory Loading**: Loads DLL into executable memory with proper PE parsing
+- **Clean DLL Download**: Automatically downloads pristine Windows DLLs from Microsoft symbol servers
+- **Multi-DLL Support**: Supports loading any DLL available on Microsoft's symbol servers (ntdll, kernel32, user32, etc.)
+- **Memory Loading**: Loads DLLs into executable memory with proper PE parsing
 - **Relocation Support**: Applies base relocations for proper function execution
 - **Security Directory**: Preserves and verifies digital signatures
-- **Function Resolution**: Locates and executes functions from the clean DLL
+- **Function Resolution**: Locates and executes functions from the clean DLLs
+- **Manual PE Loading**: Bypasses LoadLibrary for complete control over the loading process
+- **Function Execution**: Currently supports calling functions from ntdll.dll. Other DLLs can be loaded but function execution is not supported due to Windows loader dependencies.
 
 ## How It Works
 
-1. **Symbol Information Extraction**: Extracts timestamp and size from the currently loaded `ntdll.dll`
+1. **Symbol Information Extraction**: Extracts timestamp and size from the currently loaded target DLL
 2. **Clean DLL Download**: Downloads a pristine copy from Microsoft's symbol servers using the extracted information
 3. **Memory Allocation**: Allocates executable memory based on the PE header's `SizeOfImage`
 4. **PE Loading**: Copies the DLL into memory and applies base relocations
 5. **Security Verification**: Copies and verifies the security directory (digital signatures)
 6. **Function Execution**: Locates and executes functions from the clean DLL
+
+**Supported DLLs**: The tool can download and load any DLL available on Microsoft's symbol servers, including:
+- `ntdll.dll` - Native API functions (✅ **Function execution supported**)
+- `kernel32.dll` - Kernel32 API functions (⚠️ **Load only - function execution not supported**)
+- `user32.dll` - User interface functions (⚠️ **Load only - function execution not supported**)
+- `advapi32.dll` - Advanced Windows 32 API functions (⚠️ **Load only - function execution not supported**)
+- And many more system DLLs (⚠️ **Load only - function execution not supported**)
+
+**Note**: While Byont can successfully download, load, and resolve exports from any Windows system DLL, only ntdll.dll functions can be safely called from the manually loaded image. Other DLLs require Windows loader initialization and import resolution, which are not currently implemented.
 
 ## Prerequisites
 
@@ -129,7 +140,8 @@ Execution completed successfully
 
 ### Core Functions
 
-- `get_clean_ntdll()` - Downloads clean NTDLL from Microsoft symbol servers
+- `get_clean_dll(dll_name)` - Downloads clean DLL from Microsoft symbol servers (supports any DLL like "ntdll", "kernel32", etc.)
+- `get_clean_ntdll()` - Downloads clean NTDLL (backward compatibility wrapper)
 - `allocate_executable_memory()` - Allocates executable memory for DLL loading
 - `apply_relocations_raw()` - Applies base relocations to the loaded DLL
 - `get_function_from_raw_dll()` - Locates functions in the loaded DLL
