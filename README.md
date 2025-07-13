@@ -34,9 +34,6 @@ Byont downloads clean copies of Windows DLLs (such as `ntdll.dll`, `kernel32.dll
 **Supported DLLs**: The tool can download and load any DLL available on Microsoft's symbol servers, including:
 - `ntdll.dll` - Native API functions (✅ **Function execution supported**)
 - `kernel32.dll` - Kernel32 API functions (⚠️ **Load only - function execution not supported**)
-- `user32.dll` - User interface functions (⚠️ **Load only - function execution not supported**)
-- `advapi32.dll` - Advanced Windows 32 API functions (⚠️ **Load only - function execution not supported**)
-- And many more system DLLs (⚠️ **Load only - function execution not supported**)
 
 **Note**: While Byont can successfully download, load, and resolve exports from any Windows system DLL, only ntdll.dll functions can be safely called from the manually loaded image. Other DLLs require Windows loader initialization and import resolution, which are not currently implemented.
 
