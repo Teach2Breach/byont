@@ -73,9 +73,6 @@ fn get_dll_symbol_info(dll_name: &str) -> Option<PeInfo> {
             Buffer: dll_name_wide.as_ptr() as *mut _,
         };
 
-        //println!("String length: {}, Maximum length: {}", name_len, dll_name_wide.len() * 2);
-        //println!("Buffer contents: {:?}", dll_name_wide);
-
         let mut dll_handle: PVOID = std::ptr::null_mut();
         let status = LdrGetDllHandle(
             std::ptr::null_mut(),
@@ -85,12 +82,10 @@ fn get_dll_symbol_info(dll_name: &str) -> Option<PeInfo> {
         );
         
         if status != 0 {
-            println!("LdrGetDllHandle failed with status: {:#x}", status);
             return None;
         }
 
         if dll_handle.is_null() {
-            println!("LdrGetDllHandle returned null handle");
             return None;
         }
         
@@ -155,9 +150,6 @@ pub fn get_clean_dll(dll_name: &str) -> Option<Vec<u8>> {
         dll_name
     );
 
-    println!("Attempting download from: {}", symbol_path);
-
-    //consider using a better method in the future
     // Create blocking HTTP client with longer timeout
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -175,17 +167,8 @@ pub fn get_clean_dll(dll_name: &str) -> Option<Vec<u8>> {
                     response = Some(resp);
                     break;
                 }
-                println!("Download failed with status: {} (attempts remaining: {})", 
-                    resp.status(),
-                    retries - 1
-                );
             }
-            Err(e) => {
-                println!("Download error: {} (attempts remaining: {})",
-                    e,
-                    retries - 1
-                );
-            }
+            Err(_) => {}
         }
         retries -= 1;
         if retries > 0 {
@@ -198,15 +181,13 @@ pub fn get_clean_dll(dll_name: &str) -> Option<Vec<u8>> {
     // Read response bytes
     let clean_dll = match response.bytes() {
         Ok(bytes) => bytes.to_vec(),
-        Err(e) => {
-            println!("Failed to read response bytes: {}", e);
+        Err(_) => {
             return None;
         }
     };
 
     // Validate the downloaded file
     if clean_dll.len() < std::mem::size_of::<IMAGE_DOS_HEADER>() {
-        println!("Downloaded file too small");
         return None;
     }
 
@@ -214,7 +195,6 @@ pub fn get_clean_dll(dll_name: &str) -> Option<Vec<u8>> {
     let dos_header = clean_dll.as_ptr() as *const IMAGE_DOS_HEADER;
     unsafe {
         if (*dos_header).e_magic != 0x5A4D { // MZ signature
-            println!("Invalid DOS header signature");
             return None;
         }
 
@@ -222,19 +202,16 @@ pub fn get_clean_dll(dll_name: &str) -> Option<Vec<u8>> {
         let nt_headers = (clean_dll.as_ptr() as usize + (*dos_header).e_lfanew as usize) 
             as *const IMAGE_NT_HEADERS;
         if (*nt_headers).Signature != 0x00004550 { // PE signature
-            println!("Invalid PE signature");
             return None;
         }
 
         // Verify timestamp matches
         let downloaded_timestamp = (*nt_headers).FileHeader.TimeDateStamp;
         if downloaded_timestamp != pe_info.timestamp {
-            println!("Timestamp mismatch in downloaded file");
             return None;
         }
     }
 
-    println!("Successfully downloaded clean {}: {} bytes", dll_name, clean_dll.len());
     Some(clean_dll)
 }
 
@@ -258,49 +235,32 @@ pub fn apply_relocations(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option<(usiz
         let expected_base = (*nt_headers).OptionalHeader.ImageBase as usize;
         delta = clean_dll_base.wrapping_sub(expected_base);
 
-        println!("Clean DLL at: {:p}, Expected base: {:p}, Delta: {:p}", 
-            clean_dll_base as *const u8,
-            expected_base as *const u8,
-            delta as *const u8);
-
         // Get relocation directory
         let reloc_dir = &(*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
         if reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0 {
-            println!("No relocation directory found");
             return None;
         }
-
-        println!("Processing relocations at RVA {:#?}, Size: {:#?}", 
-            reloc_dir.VirtualAddress, reloc_dir.Size);
 
         let mut offset = reloc_dir.VirtualAddress as usize;
         let end_offset = offset + reloc_dir.Size as usize;
 
-        println!("Relocation directory: VA={:#x}, Size={:#x}", reloc_dir.VirtualAddress, reloc_dir.Size);
-        println!("Memory size: {:#x}, Initial offset: {:#x}", dll_bytes.len(), offset);
-        println!("End offset: {:#x}", end_offset);
-
         // Before the loop
         if offset >= dll_bytes.len() {
-            println!("CRASH POINT: Initial offset {:#x} >= size {:#x}", offset, dll_bytes.len());
             return None;
         }
 
         // Process each relocation block
         while offset < end_offset {
             if offset >= dll_bytes.len() {
-                println!("Relocation offset {:#x} exceeds buffer size {:#x}", offset, dll_bytes.len());
                 break;
             }
 
             let block = (dll_bytes.as_ptr() as usize + offset) as *const IMAGE_BASE_RELOCATION;
             if block.is_null() {
-                println!("Null relocation block pointer at offset {:#x}", offset);
                 break;
             }
 
             if (*block).SizeOfBlock == 0 || offset + (*block).SizeOfBlock as usize > dll_bytes.len() {
-                println!("Invalid relocation block at offset {:#x}", offset);
                 break;
             }
 
@@ -342,8 +302,6 @@ pub fn apply_relocations(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option<(usiz
             offset += (*block).SizeOfBlock as usize;
         }
 
-        println!("Relocations completed successfully");
-
         // Set memory to executable after relocations
         use winapi::um::memoryapi::VirtualProtect;
         
@@ -354,10 +312,8 @@ pub fn apply_relocations(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option<(usiz
             PAGE_EXECUTE_READ,
             &mut old_protect
         ) == 0 {
-            println!("Failed to make memory executable");
             return None;
         }
-        println!("Memory protection changed to PAGE_EXECUTE_READ");
     }
 
     Some((clean_dll_base, ntdll_base, delta as *const std::ffi::c_void))
@@ -370,21 +326,13 @@ pub fn get_function_from_clean_dll(clean_dll: &std::pin::Pin<Vec<u8>>, _delta: *
         let nt_headers = (clean_dll.as_ptr() as usize + (*dos_header).e_lfanew as usize) 
             as *const IMAGE_NT_HEADERS;
         
-        println!("Clean DLL base: {:p}", clean_dll.as_ptr());
-        println!("DOS header e_lfanew: {:#x}", (*dos_header).e_lfanew);
-        
         // Get export directory
         let optional_header = &(*nt_headers).OptionalHeader;
         let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress as usize;
         
-        println!("Export directory RVA: {:#x}", export_directory_rva);
-        
         // Get export directory
         let export_directory = (clean_dll.as_ptr() as usize + export_directory_rva) 
             as *const IMAGE_EXPORT_DIRECTORY;
-        
-        println!("Export directory at: {:p}", export_directory);
-        println!("Number of names: {}", (*export_directory).NumberOfNames);
         
         // Get arrays of names, functions and ordinals
         let names = (clean_dll.as_ptr() as usize + (*export_directory).AddressOfNames as usize) 
@@ -393,12 +341,6 @@ pub fn get_function_from_clean_dll(clean_dll: &std::pin::Pin<Vec<u8>>, _delta: *
             as *const u32;
         let ordinals = (clean_dll.as_ptr() as usize + (*export_directory).AddressOfNameOrdinals as usize) 
             as *const u16;
-
-        println!("Names array at: {:p}", names);
-        println!("Functions array at: {:p}", functions);
-        println!("Ordinals array at: {:p}", ordinals);
-        
-        println!("Searching for function: {}", function_name);
 
         // Search for the function
         for i in 0..(*export_directory).NumberOfNames {
@@ -411,18 +353,12 @@ pub fn get_function_from_clean_dll(clean_dll: &std::pin::Pin<Vec<u8>>, _delta: *
                 let function_rva = *functions.offset(ordinal as isize);
                 let function_addr = clean_dll.as_ptr() as usize + function_rva as usize;
                 
-                println!("Found function '{}' at index {}", function_name, i);
-                println!("Ordinal: {}", ordinal);
-                println!("Function RVA: {:#x}", function_rva);
-                println!("Function address in clean copy: {:p}", function_addr as *const u8);
-                
                 return Some(function_addr);
             }
         }
         
-        println!("Function '{}' not found in export directory", function_name);
+        return None;
     }
-    None
 }
 
 pub fn copy_security_directory(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option<()> {
@@ -436,7 +372,6 @@ pub fn copy_security_directory(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option
         let sec_dir = &(*orig_nt).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY as usize];
 
         if sec_dir.VirtualAddress == 0 || sec_dir.Size == 0 {
-            println!("No security directory found in original NTDLL");
             return None;
         }
 
@@ -444,10 +379,6 @@ pub fn copy_security_directory(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option
         let dos_header = dll_bytes.as_ptr() as *const IMAGE_DOS_HEADER;
         let nt_headers = (dll_bytes.as_ptr() as usize + (*dos_header).e_lfanew as usize) 
             as *mut IMAGE_NT_HEADERS;
-
-        println!("Copying security directory from {:p} with size {:#x}", 
-            (ntdll_base as usize + sec_dir.VirtualAddress as usize) as *const u8,
-            sec_dir.Size);
 
         // Copy the security directory
         std::ptr::copy_nonoverlapping(
@@ -459,8 +390,7 @@ pub fn copy_security_directory(dll_bytes: &mut std::pin::Pin<Vec<u8>>) -> Option
         // Update our PE headers to point to the security directory
         (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY as usize] = *sec_dir;
 
-        println!("Security directory copied successfully");
-        Some(())
+        return Some(());
     }
 }
 
@@ -473,7 +403,6 @@ pub fn verify_security_directory(dll_bytes: &std::pin::Pin<Vec<u8>>) -> Option<(
         let sec_dir = &(*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY as usize];
 
         if sec_dir.VirtualAddress == 0 || sec_dir.Size == 0 {
-            println!("No security directory found in clean DLL");
             return None;
         }
 
@@ -481,12 +410,7 @@ pub fn verify_security_directory(dll_bytes: &std::pin::Pin<Vec<u8>>) -> Option<(
         let cert_data = (dll_bytes.as_ptr() as usize + sec_dir.VirtualAddress as usize) 
             as *const WIN_CERTIFICATE;
 
-        println!("Certificate found:");
-        println!("  Length: {:#x}", (*cert_data).length);
-        println!("  Revision: {:#x}", (*cert_data).revision);
-        println!("  Type: {:#x}", (*cert_data).certificate_type);
-
-        Some(())
+        return Some(());
     }
 }
 
@@ -503,9 +427,6 @@ pub fn allocate_executable_memory(dll_bytes: &[u8]) -> Option<(*mut u8, usize)> 
         let file_size = dll_bytes.len();
         let allocation_size = std::cmp::max(virtual_size, file_size);
         
-        println!("File size: {:#x}, Virtual size: {:#x}, Allocation size: {:#x}", 
-            file_size, virtual_size, allocation_size);
-        
         // Allocate memory with proper alignment using the larger size
         let memory = VirtualAlloc(
             std::ptr::null_mut(),
@@ -515,11 +436,8 @@ pub fn allocate_executable_memory(dll_bytes: &[u8]) -> Option<(*mut u8, usize)> 
         ) as *mut u8;
         
         if memory.is_null() {
-            println!("Failed to allocate memory for DLL");
             return None;
         }
-        
-        println!("Allocated memory at {:p} with size {}", memory, allocation_size);
         
         // Copy DLL bytes to allocated memory (only the file size)
         std::ptr::copy_nonoverlapping(
@@ -537,7 +455,7 @@ pub fn allocate_executable_memory(dll_bytes: &[u8]) -> Option<(*mut u8, usize)> 
             );
         }
         
-        Some((memory, allocation_size))
+        return Some((memory, allocation_size));
     }
 }
 
@@ -565,20 +483,11 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
         let expected_base = (*nt_headers).OptionalHeader.ImageBase as usize;
         delta = clean_dll_base.wrapping_sub(expected_base);
 
-        println!("Clean DLL at: {:p}, Expected base: {:p}, Delta: {:p}", 
-            clean_dll_base as *const u8,
-            expected_base as *const u8,
-            delta as *const u8);
-
         // Get relocation directory
         let reloc_dir = &(*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
         if reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0 {
-            println!("No relocation directory found");
             return None;
         }
-
-        println!("Processing relocations at RVA {:#?}, Size: {:#?}", 
-            reloc_dir.VirtualAddress, reloc_dir.Size);
 
         // First, make sure the memory is writable before applying relocations
         use winapi::um::memoryapi::VirtualProtect;
@@ -589,40 +498,29 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
             PAGE_READWRITE,
             &mut old_protect
         ) == 0 {
-            println!("Failed to make memory writable for relocations: {}", 
-                std::io::Error::last_os_error());
             return None;
         }
-        println!("Memory protection changed to PAGE_READWRITE for relocations");
 
         let mut offset = reloc_dir.VirtualAddress as usize;
         let end_offset = offset + reloc_dir.Size as usize;
 
-        println!("Relocation directory: VA={:#x}, Size={:#x}", reloc_dir.VirtualAddress, reloc_dir.Size);
-        println!("Memory size: {:#x}, Initial offset: {:#x}", size, offset);
-        println!("End offset: {:#x}", end_offset);
-
         // Before the loop
         if offset >= size {
-            println!("CRASH POINT: Initial offset {:#x} >= size {:#x}", offset, size);
             return None;
         }
 
         // Process each relocation block
         while offset < end_offset {
             if offset >= size {
-                println!("Relocation offset {:#x} exceeds buffer size {:#x}", offset, size);
                 break;
             }
 
             let block = (memory as usize + offset) as *const IMAGE_BASE_RELOCATION;
             if block.is_null() {
-                println!("Null relocation block pointer at offset {:#x}", offset);
                 break;
             }
 
             if (*block).SizeOfBlock == 0 || offset + (*block).SizeOfBlock as usize > size {
-                println!("Invalid relocation block at offset {:#x}", offset);
                 break;
             }
 
@@ -631,12 +529,8 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
             
             // Bounds check
             if entries_start + (num_entries * 2) > size {
-                println!("Relocation entries exceed buffer size");
                 break;
             }
-
-            //println!("Processing relocation block at VA {:#x} with {} entries", 
-                //(*block).VirtualAddress, num_entries);
 
             let entries = (memory as usize + entries_start) as *const u16;
 
@@ -647,7 +541,6 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
 
                 let rva = (*block).VirtualAddress as usize + reloc_offset;
                 if rva >= size {
-                    println!("Relocation RVA {:#x} exceeds buffer size", rva);
                     continue;
                 }
 
@@ -657,28 +550,20 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
                         let ptr = addr as *mut u64;
                         let old_value = *ptr;
                         *ptr = old_value.wrapping_add(delta as u64);
-                        //println!("Applied DIR64 relocation at RVA {:#x}: {:#x} -> {:#x}", 
-                           // rva, old_value, *ptr);
                     },
                     x if x == IMAGE_REL_BASED_HIGHLOW.into() => {
                         let addr = memory as usize + rva;
                         let ptr = addr as *mut u32;
                         let old_value = *ptr;
                         *ptr = old_value.wrapping_add(delta as u32);
-                        //println!("Applied HIGHLOW relocation at RVA {:#x}: {:#x} -> {:#x}", 
-                            //rva, old_value, *ptr);
                     },
                     0 => {}, // IMAGE_REL_BASED_ABSOLUTE - skip
-                    _ => {
-                        println!("Unsupported relocation type: {}", reloc_type);
-                    }
+                    _ => {}
                 }
             }
 
             offset += (*block).SizeOfBlock as usize;
         }
-
-        println!("Relocations completed successfully");
 
         // Set memory to executable after relocations
         use winapi::um::winnt::{IMAGE_SECTION_HEADER, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE, 
@@ -689,8 +574,6 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
         let first_section = (memory as usize + 
             (*dos_header).e_lfanew as usize + 
             std::mem::size_of::<IMAGE_NT_HEADERS>()) as *const IMAGE_SECTION_HEADER;
-        
-        println!("Setting memory protection for {} sections", section_count);
         
         // Set appropriate protection for each section
         for i in 0..section_count {
@@ -726,11 +609,7 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
                 protection,
                 &mut old_protect
             ) == 0 {
-                println!("Failed to set protection for section {}: {}", 
-                    i, std::io::Error::last_os_error());
-            } else {
-                //println!("Set protection {:#x} for section {} at {:p} with size {:#x}", 
-                    //protection, i, section_start as *const u8, section_size);
+                return None;
             }
         }
         
@@ -742,11 +621,8 @@ pub fn apply_relocations_raw(memory: *mut u8, size: usize) -> Option<(usize, *co
             PAGE_EXECUTE_READ,
             &mut old_protect
         ) == 0 {
-            println!("Failed to make entire memory executable: {}", 
-                std::io::Error::last_os_error());
             return None;
         }
-        println!("Memory protection changed to PAGE_EXECUTE_READ for entire DLL");
     }
 
     Some((clean_dll_base, ntdll_base, delta as *const std::ffi::c_void))
@@ -759,21 +635,13 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
         let nt_headers = (memory as usize + (*dos_header).e_lfanew as usize) 
             as *const IMAGE_NT_HEADERS;
         
-        println!("Clean DLL base: {:p}", memory);
-        println!("DOS header e_lfanew: {:#x}", (*dos_header).e_lfanew);
-        
         // Get export directory
         let optional_header = &(*nt_headers).OptionalHeader;
         let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress as usize;
         
-        println!("Export directory RVA: {:#x}", export_directory_rva);
-        
         // Get export directory
         let export_directory = (memory as usize + export_directory_rva) 
             as *const IMAGE_EXPORT_DIRECTORY;
-        
-        println!("Export directory at: {:p}", export_directory);
-        println!("Number of names: {}", (*export_directory).NumberOfNames);
         
         // Get arrays of names, functions and ordinals
         let names = (memory as usize + (*export_directory).AddressOfNames as usize) 
@@ -782,12 +650,6 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
             as *const u32;
         let ordinals = (memory as usize + (*export_directory).AddressOfNameOrdinals as usize) 
             as *const u16;
-
-        println!("Names array at: {:p}", names);
-        println!("Functions array at: {:p}", functions);
-        println!("Ordinals array at: {:p}", ordinals);
-        
-        println!("Searching for function: {}", function_name);
 
         // Search for the function
         for i in 0..(*export_directory).NumberOfNames {
@@ -800,15 +662,10 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
                 let function_rva = *functions.offset(ordinal as isize);
                 let function_addr = memory as usize + function_rva as usize;
                 
-                println!("Found function '{}' at index {}", function_name, i);
-                println!("Ordinal: {}", ordinal);
-                println!("Function RVA: {:#x}", function_rva);
-                println!("Function address in clean copy: {:p}", function_addr as *const u8);
-                
                 // Verify the function address is within the DLL's memory range
                 let image_size = (*nt_headers).OptionalHeader.SizeOfImage as usize;
                 if function_rva as usize >= image_size {
-                    println!("WARNING: Function RVA {:#x} exceeds image size {:#x}", function_rva, image_size);
+                    return Some((function_addr, true));
                 }
                 
                 // Check if the function is forwarded
@@ -820,13 +677,11 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
                     let forward_str = std::ffi::CStr::from_ptr((memory as usize + function_rva as usize) as *const i8)
                         .to_str()
                         .unwrap_or("");
-                    println!("Function is forwarded to: {}", forward_str);
                     return Some((function_addr, true));
                 }
                 
                 // Check the first few bytes of the function to make sure it looks like code
                 let bytes = std::slice::from_raw_parts(function_addr as *const u8, 16);
-                println!("First 16 bytes of function: {:02X?}", bytes);
                 
                 // Verify memory protection at function address
                 use winapi::um::memoryapi::VirtualQuery;
@@ -840,9 +695,8 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
                 );
                 
                 if result != 0 {
-                    println!("Memory protection at function address: {:#x}", mem_info.Protect);
                     if mem_info.Protect & PAGE_EXECUTE_READ == 0 {
-                        println!("WARNING: Function memory is not executable!");
+                        return Some((function_addr, false));
                     }
                 }
                 
@@ -850,14 +704,12 @@ pub fn get_function_from_raw_dll(memory: *const u8, _delta: *const std::ffi::c_v
             }
         }
         
-        println!("Function '{}' not found in export directory", function_name);
+        return None;
     }
-    None
 }
 
 pub fn copy_security_directory_raw(memory: *mut u8, _size: usize, dll_name: &str) -> Option<()> {
     if dll_name.to_ascii_lowercase() != "ntdll" {
-        println!("Skipping security directory copy for {} (only supported for ntdll)", dll_name);
         return Some(());
     }
     unsafe {
@@ -870,7 +722,6 @@ pub fn copy_security_directory_raw(memory: *mut u8, _size: usize, dll_name: &str
         let sec_dir = &(*orig_nt).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY as usize];
 
         if sec_dir.VirtualAddress == 0 || sec_dir.Size == 0 {
-            println!("No security directory found in original ntdll");
             return Some(());
         }
 
@@ -878,10 +729,6 @@ pub fn copy_security_directory_raw(memory: *mut u8, _size: usize, dll_name: &str
         let dos_header = memory as *const IMAGE_DOS_HEADER;
         let nt_headers = (memory as usize + (*dos_header).e_lfanew as usize) 
             as *mut IMAGE_NT_HEADERS;
-
-        println!("Copying security directory from {:p} with size {:#x}", 
-            (source_dll_base as usize + sec_dir.VirtualAddress as usize) as *const u8,
-            sec_dir.Size);
 
         // Copy the security directory
         std::ptr::copy_nonoverlapping(
@@ -893,8 +740,7 @@ pub fn copy_security_directory_raw(memory: *mut u8, _size: usize, dll_name: &str
         // Update our PE headers to point to the security directory
         (*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY as usize] = *sec_dir;
 
-        println!("Security directory copied successfully");
-        Some(())
+        return Some(());
     }
 }
 
@@ -907,7 +753,6 @@ pub fn verify_security_directory_raw(memory: *const u8, _size: usize) -> Option<
         let sec_dir = &(*nt_headers).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY as usize];
 
         if sec_dir.VirtualAddress == 0 || sec_dir.Size == 0 {
-            println!("No security directory found in clean DLL");
             return None;
         }
 
@@ -915,12 +760,7 @@ pub fn verify_security_directory_raw(memory: *const u8, _size: usize) -> Option<
         let cert_data = (memory as usize + sec_dir.VirtualAddress as usize) 
             as *const WIN_CERTIFICATE;
 
-        println!("Certificate found:");
-        println!("  Length: {:#x}", (*cert_data).length);
-        println!("  Revision: {:#x}", (*cert_data).revision);
-        println!("  Type: {:#x}", (*cert_data).certificate_type);
-
-        Some(())
+        return Some(());
     }
 }
 
